@@ -1,0 +1,201 @@
+<!-- weather.html - Погодное приложение на JavaScript (OpenWeatherMap API) -->
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🌤️ Погода - веб-приложение</title>
+    <style>
+        * { box-sizing: border-box; font-family: 'Segoe UI', system-ui; }
+        body { background: linear-gradient(145deg, #1e3c72, #2a5298); margin: 0; min-height: 100vh; display: flex; justify-content: center; align-items: center; padding: 20px; }
+        .card { background: rgba(255,255,255,0.95); border-radius: 32px; padding: 30px; max-width: 800px; width: 100%; box-shadow: 0 20px 35px rgba(0,0,0,0.2); }
+        h1 { margin: 0 0 10px; display: flex; align-items: center; gap: 10px; }
+        .api-key { display: flex; gap: 10px; margin-bottom: 20px; }
+        .api-key input { flex: 1; padding: 10px; border-radius: 40px; border: 1px solid #ccc; }
+        .search { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
+        .search input { flex: 1; padding: 12px; border-radius: 40px; border: 1px solid #ccc; font-size: 16px; }
+        button { background: #3498db; color: white; border: none; padding: 12px 24px; border-radius: 40px; cursor: pointer; transition: 0.1s; }
+        button:hover { background: #2980b9; }
+        .units { margin-bottom: 20px; }
+        .units label { margin-right: 15px; }
+        .weather-current { background: #ecf0f1; border-radius: 24px; padding: 20px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; }
+        .temp { font-size: 48px; font-weight: bold; }
+        .details { display: grid; grid-template-columns: repeat(2,1fr); gap: 10px; margin-top: 10px; }
+        .forecast { display: flex; overflow-x: auto; gap: 15px; padding: 10px 0; }
+        .forecast-day { background: #fff; border-radius: 20px; padding: 12px; min-width: 120px; text-align: center; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        .forecast-day img { width: 50px; }
+        .favorites { margin-top: 20px; display: flex; flex-wrap: wrap; gap: 8px; }
+        .fav-btn { background: #f39c12; padding: 6px 12px; font-size: 14px; }
+        .error { color: red; margin-top: 10px; }
+        .cold { color: #3498db; }
+        .warm { color: #e67e22; }
+        .hot { color: #e74c3c; }
+    </style>
+</head>
+<body>
+<div class="card">
+    <h1>🌤️ Погодный виджет</h1>
+    <div class="api-key">
+        <input type="text" id="apiKeyInput" placeholder="OpenWeatherMap API Key" autocomplete="off">
+        <button id="saveKeyBtn">Сохранить</button>
+    </div>
+    <div class="units">
+        <label><input type="radio" name="units" value="metric" checked> °C, м/с</label>
+        <label><input type="radio" name="units" value="imperial"> °F, mph</label>
+    </div>
+    <div class="search">
+        <input type="text" id="cityInput" placeholder="Название города...">
+        <button id="searchBtn">🔍 Найти</button>
+        <button id="locateBtn">📍 Моё местоположение</button>
+    </div>
+    <div id="currentWeather"></div>
+    <div id="forecast"></div>
+    <div id="favorites" class="favorites"></div>
+    <div id="error" class="error"></div>
+</div>
+<script>
+    let apiKey = localStorage.getItem('weather_api_key') || '';
+    let units = 'metric';
+    let favorites = JSON.parse(localStorage.getItem('favorites') || '[]');
+
+    const apiKeyInput = document.getElementById('apiKeyInput');
+    const saveKeyBtn = document.getElementById('saveKeyBtn');
+    const cityInput = document.getElementById('cityInput');
+    const searchBtn = document.getElementById('searchBtn');
+    const locateBtn = document.getElementById('locateBtn');
+    const currentDiv = document.getElementById('currentWeather');
+    const forecastDiv = document.getElementById('forecast');
+    const favDiv = document.getElementById('favorites');
+    const errorDiv = document.getElementById('error');
+
+    if (apiKey) apiKeyInput.value = apiKey;
+    saveKeyBtn.onclick = () => {
+        apiKey = apiKeyInput.value.trim();
+        if (apiKey) localStorage.setItem('weather_api_key', apiKey);
+        else localStorage.removeItem('weather_api_key');
+        errorDiv.innerText = '';
+    };
+    document.querySelectorAll('input[name="units"]').forEach(rb => {
+        rb.onchange = () => { units = document.querySelector('input[name="units"]:checked').value; if (cityInput.value) fetchWeather(cityInput.value); };
+    });
+
+    async function fetchWeather(city) {
+        if (!apiKey) { errorDiv.innerText = 'Введите API ключ'; return; }
+        errorDiv.innerText = '';
+        try {
+            const currentUrl = `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(city)}&appid=${apiKey}&units=${units}&lang=ru`;
+            const currentRes = await fetch(currentUrl);
+            if (!currentRes.ok) throw new Error(`Город не найден (${currentRes.status})`);
+            const current = await currentRes.json();
+            displayCurrent(current);
+
+            const forecastUrl = `https://api.openweathermap.org/data/2.5/forecast?q=${encodeURIComponent(city)}&appid=${apiKey}&units=${units}&lang=ru`;
+            const forecastRes = await fetch(forecastUrl);
+            if (forecastRes.ok) {
+                const forecast = await forecastRes.json();
+                displayForecast(forecast);
+            } else {
+                forecastDiv.innerHTML = '<p>Прогноз недоступен</p>';
+            }
+            addToFavorites(city);
+        } catch (err) {
+            errorDiv.innerText = err.message;
+        }
+    }
+
+    function displayCurrent(data) {
+        const temp = data.main.temp;
+        const feels = data.main.feels_like;
+        const humidity = data.main.humidity;
+        const wind = data.wind.speed;
+        const desc = data.weather[0].description;
+        const icon = `https://openweathermap.org/img/wn/${data.weather[0].icon}@2x.png`;
+        let tempClass = '';
+        if (units === 'metric') {
+            if (temp < 10) tempClass = 'cold';
+            else if (temp < 25) tempClass = 'warm';
+            else tempClass = 'hot';
+        }
+        currentDiv.innerHTML = `
+            <div class="weather-current">
+                <div>
+                    <h2>${data.name}, ${data.sys.country}</h2>
+                    <div class="temp ${tempClass}">${Math.round(temp)}°${units === 'metric' ? 'C' : 'F'}</div>
+                    <div>${desc.charAt(0).toUpperCase() + desc.slice(1)}</div>
+                    <div>Ощущается как ${Math.round(feels)}°</div>
+                </div>
+                <img src="${icon}" alt="иконка">
+            </div>
+            <div class="details">
+                <div>💧 Влажность: ${humidity}%</div>
+                <div>💨 Ветер: ${wind} ${units === 'metric' ? 'м/с' : 'mph'}</div>
+                <div>🔽 Давление: ${data.main.pressure} гПа</div>
+            </div>
+        `;
+    }
+
+    function displayForecast(data) {
+        const days = {};
+        for (let item of data.list) {
+            const date = new Date(item.dt * 1000);
+            const dayKey = date.toLocaleDateString('ru-RU');
+            if (!days[dayKey]) days[dayKey] = [];
+            days[dayKey].push(item);
+        }
+        let html = '<h3>Прогноз на 5 дней</h3><div class="forecast">';
+        let count = 0;
+        for (let [day, items] of Object.entries(days)) {
+            if (count++ >= 5) break;
+            const temps = items.map(i => i.main.temp);
+            const maxTemp = Math.max(...temps);
+            const minTemp = Math.min(...temps);
+            const icon = items[Math.floor(items.length/2)].weather[0].icon;
+            html += `
+                <div class="forecast-day">
+                    <div>${day}</div>
+                    <img src="https://openweathermap.org/img/wn/${icon}.png">
+                    <div>${Math.round(minTemp)}°..${Math.round(maxTemp)}°</div>
+                </div>
+            `;
+        }
+        html += '</div>';
+        forecastDiv.innerHTML = html;
+    }
+
+    function addToFavorites(city) {
+        if (!favorites.includes(city) && city) {
+            favorites.unshift(city);
+            if (favorites.length > 5) favorites.pop();
+            localStorage.setItem('favorites', JSON.stringify(favorites));
+        }
+        renderFavorites();
+    }
+
+    function renderFavorites() {
+        favDiv.innerHTML = favorites.map(city => `<button class="fav-btn" data-city="${city}">⭐ ${city}</button>`).join('');
+        document.querySelectorAll('.fav-btn').forEach(btn => {
+            btn.onclick = () => { cityInput.value = btn.dataset.city; fetchWeather(btn.dataset.city); };
+        });
+    }
+
+    searchBtn.onclick = () => { if (cityInput.value) fetchWeather(cityInput.value); };
+    locateBtn.onclick = () => {
+        if (!navigator.geolocation) { errorDiv.innerText = 'Геолокация не поддерживается'; return; }
+        navigator.geolocation.getCurrentPosition(async (pos) => {
+            const { latitude, longitude } = pos.coords;
+            if (!apiKey) { errorDiv.innerText = 'Введите API ключ'; return; }
+            const url = `https://api.openweathermap.org/data/2.5/weather?lat=${latitude}&lon=${longitude}&appid=${apiKey}&units=${units}&lang=ru`;
+            const res = await fetch(url);
+            const data = await res.json();
+            if (res.ok) {
+                cityInput.value = data.name;
+                fetchWeather(data.name);
+            } else errorDiv.innerText = 'Не удалось определить город';
+        }, () => errorDiv.innerText = 'Геолокация отклонена');
+    };
+    cityInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') fetchWeather(cityInput.value); });
+    renderFavorites();
+    if (apiKey && cityInput.value) fetchWeather(cityInput.value);
+</script>
+</body>
+</html>
