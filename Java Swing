@@ -1,0 +1,131 @@
+// WeatherApp.java - Погодное приложение на Java Swing
+import javax.swing.*;
+import java.awt.*;
+import java.awt.event.*;
+import java.net.http.*;
+import java.net.URI;
+import java.io.*;
+import org.json.*;
+
+public class WeatherApp extends JFrame {
+    private JTextField cityField;
+    private JLabel tempLabel, feelsLabel, humidityLabel, windLabel, pressureLabel, descLabel, iconLabel;
+    private JTextArea forecastArea;
+    private JComboBox<String> unitsBox;
+    private String apiKey;
+
+    public WeatherApp() {
+        apiKey = System.getenv("OPENWEATHER_API_KEY");
+        if (apiKey == null) apiKey = JOptionPane.showInputDialog("Введите OpenWeatherMap API ключ:");
+        initUI();
+    }
+
+    private void initUI() {
+        setTitle("Погодное приложение Java");
+        setSize(600, 500);
+        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        setLayout(new BorderLayout(10,10));
+        JPanel top = new JPanel(new FlowLayout());
+        cityField = new JTextField(15);
+        JButton searchBtn = new JButton("Поиск");
+        unitsBox = new JComboBox<>(new String[]{"metric (°C)", "imperial (°F)"});
+        searchBtn.addActionListener(e -> fetchWeather());
+        cityField.addActionListener(e -> fetchWeather());
+        top.add(new JLabel("Город:"));
+        top.add(cityField);
+        top.add(searchBtn);
+        top.add(unitsBox);
+        add(top, BorderLayout.NORTH);
+        
+        JPanel info = new JPanel(new GridLayout(6,2,5,5));
+        info.setBorder(BorderFactory.createTitledBorder("Текущая погода"));
+        info.add(new JLabel("Температура:")); tempLabel = new JLabel(); info.add(tempLabel);
+        info.add(new JLabel("Ощущается:")); feelsLabel = new JLabel(); info.add(feelsLabel);
+        info.add(new JLabel("Влажность:")); humidityLabel = new JLabel(); info.add(humidityLabel);
+        info.add(new JLabel("Ветер:")); windLabel = new JLabel(); info.add(windLabel);
+        info.add(new JLabel("Давление:")); pressureLabel = new JLabel(); info.add(pressureLabel);
+        info.add(new JLabel("Описание:")); descLabel = new JLabel(); info.add(descLabel);
+        add(info, BorderLayout.CENTER);
+        
+        forecastArea = new JTextArea(8,30);
+        forecastArea.setEditable(false);
+        add(new JScrollPane(forecastArea), BorderLayout.SOUTH);
+        setVisible(true);
+    }
+    
+    private void fetchWeather() {
+        String city = cityField.getText().trim();
+        if (city.isEmpty()) return;
+        String units = unitsBox.getSelectedIndex() == 0 ? "metric" : "imperial";
+        try {
+            HttpClient client = HttpClient.newHttpClient();
+            String url = String.format("https://api.openweathermap.org/data/2.5/weather?q=%s&appid=%s&units=%s&lang=ru", city, apiKey, units);
+            HttpRequest request = HttpRequest.newBuilder().uri(URI.create(url)).build();
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() != 200) {
+                JOptionPane.showMessageDialog(this, "Город не найден или ошибка API");
+                return;
+            }
+            JSONObject json = new JSONObject(response.body());
+            displayCurrent(json, units);
+            
+            // прогноз
+            String forecastUrl = String.format("https://api.openweathermap.org/data/2.5/forecast?q=%s&appid=%s&units=%s&lang=ru", city, apiKey, units);
+            HttpRequest forecastReq = HttpRequest.newBuilder().uri(URI.create(forecastUrl)).build();
+            HttpResponse<String> forecastResp = client.send(forecastReq, HttpResponse.BodyHandlers.ofString());
+            if (forecastResp.statusCode() == 200) {
+                displayForecast(new JSONObject(forecastResp.body()), units);
+            } else {
+                forecastArea.setText("Прогноз недоступен");
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+            JOptionPane.showMessageDialog(this, "Ошибка сети: "+e.getMessage());
+        }
+    }
+    
+    private void displayCurrent(JSONObject json, String units) {
+        JSONObject main = json.getJSONObject("main");
+        double temp = main.getDouble("temp");
+        double feels = main.getDouble("feels_like");
+        int humidity = main.getInt("humidity");
+        int pressure = main.getInt("pressure");
+        JSONObject wind = json.getJSONObject("wind");
+        double windSpeed = wind.getDouble("speed");
+        String desc = json.getJSONArray("weather").getJSONObject(0).getString("description");
+        String tempUnit = units.equals("metric") ? "°C" : "°F";
+        String windUnit = units.equals("metric") ? "м/с" : "mph";
+        tempLabel.setText(String.format("%.1f %s", temp, tempUnit));
+        feelsLabel.setText(String.format("%.1f %s", feels, tempUnit));
+        humidityLabel.setText(humidity+"%");
+        windLabel.setText(String.format("%.1f %s", windSpeed, windUnit));
+        pressureLabel.setText(pressure+" гПа");
+        descLabel.setText(desc);
+    }
+    
+    private void displayForecast(JSONObject json, String units) {
+        JSONArray list = json.getJSONArray("list");
+        java.util.Map<String, java.util.ArrayList<Double>> days = new java.util.HashMap<>();
+        for (int i=0; i<list.length(); i++) {
+            JSONObject item = list.getJSONObject(i);
+            long dt = item.getLong("dt");
+            String day = new java.text.SimpleDateFormat("yyyy-MM-dd").format(new java.util.Date(dt*1000));
+            double temp = item.getJSONObject("main").getDouble("temp");
+            days.computeIfAbsent(day, k -> new java.util.ArrayList<>()).add(temp);
+        }
+        StringBuilder sb = new StringBuilder("Прогноз на 5 дней:\n");
+        int count = 0;
+        String tempUnit = units.equals("metric") ? "°C" : "°F";
+        for (var entry : days.entrySet()) {
+            if (count++ >=5) break;
+            double min = entry.getValue().stream().min(Double::compare).orElse(0.0);
+            double max = entry.getValue().stream().max(Double::compare).orElse(0.0);
+            sb.append(String.format("%s: %.1f .. %.1f %s\n", entry.getKey(), min, max, tempUnit));
+        }
+        forecastArea.setText(sb.toString());
+    }
+    
+    public static void main(String[] args) {
+        SwingUtilities.invokeLater(WeatherApp::new);
+    }
+}
