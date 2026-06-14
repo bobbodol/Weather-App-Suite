@@ -1,0 +1,138 @@
+// weather.rs - Погодное приложение на Rust (async, цветной вывод)
+// Добавьте зависимости в Cargo.toml:
+// [dependencies]
+// reqwest = { version = "0.11", features = ["json"] }
+// serde = { version = "1.0", features = ["derive"] }
+// serde_json = "1.0"
+// colored = "2.0"
+// tokio = { version = "1", features = ["full"] }
+
+use colored::*;
+use serde::Deserialize;
+use std::env;
+use std::io;
+
+#[derive(Deserialize)]
+struct WeatherResponse {
+    main: MainData,
+    wind: WindData,
+    weather: Vec<WeatherInfo>,
+    name: String,
+    sys: SysData,
+}
+
+#[derive(Deserialize)]
+struct MainData {
+    temp: f64,
+    feels_like: f64,
+    humidity: u32,
+    pressure: u32,
+}
+
+#[derive(Deserialize)]
+struct WindData {
+    speed: f64,
+}
+
+#[derive(Deserialize)]
+struct WeatherInfo {
+    description: String,
+}
+
+#[derive(Deserialize)]
+struct SysData {
+    country: String,
+}
+
+#[derive(Deserialize)]
+struct ForecastResponse {
+    list: Vec<ForecastItem>,
+}
+
+#[derive(Deserialize)]
+struct ForecastItem {
+    dt: i64,
+    main: MainData,
+}
+
+const API_BASE: &str = "https://api.openweathermap.org/data/2.5";
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let api_key = env::var("OPENWEATHER_API_KEY").expect("Установите OPENWEATHER_API_KEY");
+    println!("{}", "🌤️ Погодное приложение (Rust)".bright_cyan());
+    let mut units = "metric";
+    println!("Выберите единицы: 1-метрические, 2-имперские");
+    let mut choice = String::new();
+    io::stdin().read_line(&mut choice)?;
+    if choice.trim() == "2" {
+        units = "imperial";
+    }
+    loop {
+        println!("\nВведите город (или 'q' для выхода):");
+        let mut city = String::new();
+        io::stdin().read_line(&mut city)?;
+        let city = city.trim();
+        if city == "q" {
+            break;
+        }
+        if let Err(e) = get_weather(&api_key, city, units).await {
+            println!("{} {}", "❌".red(), e);
+        }
+    }
+    Ok(())
+}
+
+async fn get_weather(api_key: &str, city: &str, units: &str) -> Result<(), String> {
+    let client = reqwest::Client::new();
+    let current_url = format!(
+        "{}/weather?q={}&appid={}&units={}&lang=ru",
+        API_BASE, city, api_key, units
+    );
+    let resp = client.get(&current_url).send().await.map_err(|e| format!("Сетевая ошибка: {}", e))?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}: город не найден или ключ неверный", resp.status()));
+    }
+    let weather: WeatherResponse = resp.json().await.map_err(|e| format!("Ошибка JSON: {}", e))?;
+    
+    let forecast_url = format!(
+        "{}/forecast?q={}&appid={}&units={}&lang=ru",
+        API_BASE, city, api_key, units
+    );
+    let forecast_resp = client.get(&forecast_url).send().await.ok();
+    let forecast: Option<ForecastResponse> = if let Some(fr) = forecast_resp {
+        fr.json().await.ok()
+    } else {
+        None
+    };
+    
+    let temp_unit = if units == "metric" { "°C" } else { "°F" };
+    let wind_unit = if units == "metric" { "м/с" } else { "mph" };
+    
+    println!("\n📍 {}, {}", weather.name, weather.sys.country);
+    println!("🌡️ {} {:.1}{} (ощущается {:.1}{})",
+        "Температура:".green(), weather.main.temp, temp_unit, weather.main.feels_like, temp_unit);
+    println!("💧 {} {}%", "Влажность:".green(), weather.main.humidity);
+    println!("💨 {} {:.1} {}", "Ветер:".green(), weather.wind.speed, wind_unit);
+    println!("🔽 {} {} гПа", "Давление:".green(), weather.main.pressure);
+    println!("☁️ {}", weather.weather[0].description);
+    
+    if let Some(fc) = forecast {
+        use std::collections::HashMap;
+        let mut day_temps: HashMap<String, Vec<f64>> = HashMap::new();
+        for item in fc.list {
+            let day = chrono::DateTime::from_timestamp(item.dt, 0)
+                .unwrap()
+                .format("%Y-%m-%d")
+                .to_string();
+            day_temps.entry(day).or_default().push(item.main.temp);
+        }
+        println!("\n📅 Прогноз на 5 дней:");
+        for (day, temps) in day_temps.iter().take(5) {
+            let min_t = temps.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+            let max_t = temps.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+            println!("{}: {:.1} .. {:.1}{}", day, min_t, max_t, temp_unit);
+        }
+    }
+    Ok(())
+}
