@@ -1,0 +1,129 @@
+<?php
+// weather.php - Погодное приложение на PHP
+session_start();
+$apiKey = getenv('OPENWEATHER_API_KEY') ?: 'ваш_ключ_здесь'; // замените или используйте переменную окружения
+$units = $_SESSION['units'] ?? 'metric';
+$favorites = $_SESSION['favorites'] ?? [];
+$error = '';
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (isset($_POST['units'])) {
+        $_SESSION['units'] = $_POST['units'];
+        $units = $_POST['units'];
+    }
+    if (isset($_POST['city']) && !empty($_POST['city'])) {
+        $city = urlencode($_POST['city']);
+        $currentUrl = "https://api.openweathermap.org/data/2.5/weather?q={$city}&appid={$apiKey}&units={$units}&lang=ru";
+        $forecastUrl = "https://api.openweathermap.org/data/2.5/forecast?q={$city}&appid={$apiKey}&units={$units}&lang=ru";
+        $currentJson = @file_get_contents($currentUrl);
+        $forecastJson = @file_get_contents($forecastUrl);
+        if ($currentJson === false) {
+            $error = "Не удалось получить данные. Проверьте API ключ или название города.";
+        } else {
+            $current = json_decode($currentJson, true);
+            $forecast = json_decode($forecastJson, true);
+            $_SESSION['last_city'] = $_POST['city'];
+            if (!in_array($_POST['city'], $favorites)) {
+                $favorites[] = $_POST['city'];
+                $_SESSION['favorites'] = array_slice($favorites, -5);
+            }
+        }
+    }
+    if (isset($_POST['favorite_city'])) {
+        $_SESSION['last_city'] = $_POST['favorite_city'];
+        header("Location: weather.php");
+        exit;
+    }
+    if (isset($_POST['clear_favorites'])) {
+        $_SESSION['favorites'] = [];
+    }
+}
+$currentCity = $_SESSION['last_city'] ?? '';
+?>
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>🌤️ Погодное приложение PHP</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #1e3c72; margin: 0; padding: 20px; display: flex; justify-content: center; }
+        .card { background: white; border-radius: 32px; padding: 30px; max-width: 700px; width: 100%; box-shadow: 0 20px 35px rgba(0,0,0,0.2); }
+        .search { display: flex; gap: 10px; margin: 20px 0; flex-wrap: wrap; }
+        input, select, button { padding: 10px; border-radius: 40px; border: 1px solid #ccc; }
+        button { background: #3498db; color: white; border: none; cursor: pointer; }
+        .weather { background: #ecf0f1; border-radius: 24px; padding: 20px; margin: 15px 0; }
+        .temp { font-size: 36px; font-weight: bold; }
+        .forecast { display: flex; gap: 10px; overflow-x: auto; margin-top: 20px; }
+        .forecast-day { background: white; border-radius: 20px; padding: 10px; min-width: 100px; text-align: center; }
+        .favorites { margin-top: 20px; display: flex; flex-wrap: wrap; gap: 8px; }
+        .fav-btn { background: #f39c12; }
+        .error { color: red; margin-top: 10px; }
+    </style>
+</head>
+<body>
+<div class="card">
+    <h1>🌤️ Погодное приложение</h1>
+    <form method="POST">
+        <div class="units">
+            <label><input type="radio" name="units" value="metric" <?= $units === 'metric' ? 'checked' : '' ?> onchange="this.form.submit()"> °C, м/с</label>
+            <label><input type="radio" name="units" value="imperial" <?= $units === 'imperial' ? 'checked' : '' ?> onchange="this.form.submit()"> °F, mph</label>
+        </div>
+    </form>
+    <form method="POST" class="search">
+        <input type="text" name="city" placeholder="Название города" value="<?= htmlspecialchars($currentCity) ?>" required>
+        <button type="submit">🔍 Узнать погоду</button>
+    </form>
+    
+    <?php if ($error): ?>
+        <div class="error"><?= $error ?></div>
+    <?php endif; ?>
+    
+    <?php if (isset($current) && isset($current['main'])): 
+        $tempUnit = $units === 'metric' ? '°C' : '°F';
+        $windUnit = $units === 'metric' ? 'м/с' : 'mph';
+    ?>
+        <div class="weather">
+            <h2><?= $current['name'] ?>, <?= $current['sys']['country'] ?></h2>
+            <div class="temp"><?= round($current['main']['temp']) ?> <?= $tempUnit ?></div>
+            <div>Ощущается как <?= round($current['main']['feels_like']) ?> <?= $tempUnit ?></div>
+            <div>💧 Влажность: <?= $current['main']['humidity'] ?>%</div>
+            <div>💨 Ветер: <?= $current['wind']['speed'] ?> <?= $windUnit ?></div>
+            <div>🔽 Давление: <?= $current['main']['pressure'] ?> гПа</div>
+            <div>☁️ <?= ucfirst($current['weather'][0]['description']) ?></div>
+        </div>
+        
+        <?php if (isset($forecast['list'])): 
+            $days = [];
+            foreach ($forecast['list'] as $item) {
+                $day = date('Y-m-d', $item['dt']);
+                $days[$day][] = $item['main']['temp'];
+            }
+            echo '<h3>Прогноз на 5 дней</h3><div class="forecast">';
+            $count = 0;
+            foreach ($days as $day => $temps) {
+                if ($count++ >= 5) break;
+                $min = min($temps);
+                $max = max($temps);
+                echo "<div class='forecast-day'><div>$day</div><div>" . round($min) . ".." . round($max) . " $tempUnit</div></div>";
+            }
+            echo '</div>';
+        endif; ?>
+    <?php endif; ?>
+    
+    <div class="favorites">
+        <strong>⭐ Избранные города:</strong>
+        <?php foreach ($favorites as $fav): ?>
+            <form method="POST" style="display:inline">
+                <input type="hidden" name="favorite_city" value="<?= htmlspecialchars($fav) ?>">
+                <button type="submit" class="fav-btn"><?= htmlspecialchars($fav) ?></button>
+            </form>
+        <?php endforeach; ?>
+        <?php if (!empty($favorites)): ?>
+            <form method="POST" style="display:inline">
+                <button type="submit" name="clear_favorites" value="1" style="background:#e74c3c">Очистить</button>
+            </form>
+        <?php endif; ?>
+    </div>
+</div>
+</body>
+</html>
