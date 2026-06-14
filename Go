@@ -1,0 +1,139 @@
+// weather.go - Погодное приложение на Go (CLI с цветным выводом)
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"io/ioutil"
+	"net/http"
+	"os"
+	"strings"
+	"time"
+)
+
+const apiBase = "https://api.openweathermap.org/data/2.5"
+
+type Weather struct {
+	Main struct {
+		Temp     float64 `json:"temp"`
+		FeelsLike float64 `json:"feels_like"`
+		Humidity int     `json:"humidity"`
+		Pressure int     `json:"pressure"`
+	} `json:"main"`
+	Wind  struct{ Speed float64 `json:"speed"` } `json:"wind"`
+	Weather []struct {
+		Description string `json:"description"`
+		Icon        string `json:"icon"`
+	} `json:"weather"`
+	Name    string `json:"name"`
+	Sys     struct{ Country string `json:"country"` } `json:"sys"`
+}
+
+type Forecast struct {
+	List []struct {
+		Dt   int64 `json:"dt"`
+		Main struct {
+			Temp float64 `json:"temp"`
+		} `json:"main"`
+		Weather []struct {
+			Icon string `json:"icon"`
+		} `json:"weather"`
+	} `json:"list"`
+}
+
+var apiKey string
+
+func main() {
+	apiKey = os.Getenv("OPENWEATHER_API_KEY")
+	if apiKey == "" {
+		fmt.Println("❌ Установите OPENWEATHER_API_KEY")
+		return
+	}
+	units := "metric"
+	fmt.Println("🌤️ Погодное приложение (Go)")
+	fmt.Print("Единицы (1-метрические, 2-имперские): ")
+	var u string
+	fmt.Scanln(&u)
+	if u == "2" {
+		units = "imperial"
+	}
+	var city string
+	for {
+		fmt.Print("\nВведите город (или 'q'): ")
+		fmt.Scanln(&city)
+		if city == "q" {
+			break
+		}
+		getWeather(city, units)
+	}
+}
+
+func getWeather(city, units string) {
+	// текущая погода
+	url := fmt.Sprintf("%s/weather?q=%s&appid=%s&units=%s&lang=ru", apiBase, city, apiKey, units)
+	resp, err := http.Get(url)
+	if err != nil {
+		fmt.Println("Ошибка сети:", err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		fmt.Printf("Ошибка %d: город не найден или ключ неверный\n", resp.StatusCode)
+		return
+	}
+	body, _ := ioutil.ReadAll(resp.Body)
+	var w Weather
+	json.Unmarshal(body, &w)
+
+	// прогноз
+	forecastUrl := fmt.Sprintf("%s/forecast?q=%s&appid=%s&units=%s&lang=ru", apiBase, city, apiKey, units)
+	fresp, _ := http.Get(forecastUrl)
+	var forecast Forecast
+	if fresp != nil && fresp.StatusCode == 200 {
+		fbody, _ := ioutil.ReadAll(fresp.Body)
+		json.Unmarshal(fbody, &forecast)
+		defer fresp.Body.Close()
+	}
+
+	// вывод
+	tempUnit := "°C"
+	windUnit := "м/с"
+	if units == "imperial" {
+		tempUnit = "°F"
+		windUnit = "mph"
+	}
+	fmt.Printf("\n📍 %s, %s\n", w.Name, w.Sys.Country)
+	fmt.Printf("🌡️ Температура: %.1f%s (ощущается %.1f%s)\n", w.Main.Temp, tempUnit, w.Main.FeelsLike, tempUnit)
+	fmt.Printf("💧 Влажность: %d%%\n", w.Main.Humidity)
+	fmt.Printf("💨 Ветер: %.1f %s\n", w.Wind.Speed, windUnit)
+	fmt.Printf("🔽 Давление: %d гПа\n", w.Main.Pressure)
+	fmt.Printf("☁️ %s\n", w.Weather[0].Description)
+
+	if len(forecast.List) > 0 {
+		// группируем по дням
+		dayTemps := make(map[string][]float64)
+		for _, item := range forecast.List {
+			t := time.Unix(item.Dt, 0)
+			day := t.Format("2006-01-02")
+			dayTemps[day] = append(dayTemps[day], item.Main.Temp)
+		}
+		fmt.Println("\n📅 Прогноз на 5 дней:")
+		count := 0
+		for day, temps := range dayTemps {
+			if count >= 5 {
+				break
+			}
+			minT, maxT := temps[0], temps[0]
+			for _, t := range temps {
+				if t < minT {
+					minT = t
+				}
+				if t > maxT {
+					maxT = t
+				}
+			}
+			fmt.Printf("%s: %.1f .. %.1f%s\n", day, minT, maxT, tempUnit)
+			count++
+		}
+	}
+}
